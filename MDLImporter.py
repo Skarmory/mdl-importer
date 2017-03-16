@@ -27,7 +27,7 @@ bl_info = {
 	"name": "MDL Importer",
 	"description": "Imports Warcraft 3 models",
 	"author": "Yellow",
-	"version": (0,1,0),
+	"version": (0,1,1),
 	"blender": (2,7,8),
 	"location": "File > Import > WC3 MDL (.mdl)",
 	"category": "Import-Export"
@@ -47,6 +47,11 @@ class Parser(object):
 		elif line.endswith("}"):
 			pars -= 1
 		return pars
+	
+	def read(self, pars):
+		line = self.file.readline().replace(",", "").strip()
+		pars = self.check_pars(pars, line)
+		return line, pars
 
 class VersionParser(Parser):
 	def parse(self, context):
@@ -167,18 +172,38 @@ class MaterialParser(Parser):
 					
 		return ret
 
-		
+class Layer(object):
+	SHADING_FLAGS = {"Unshaded": 2**0, "SphereEnvironmentMap": 2**1, "TwoSided": 2**4, "Unfogged": 2**5, "NoDepthTest": 2**6, "NoDepthSet": 2**7}
+	FILTER_MODES = ["None", "Transparent", "Blend", "Additive", "AddAlpha", "Modulate", "Modulate2x"]
+	def __init__(self):
+		self.filter_mode 		 = "None"
+		self.shading_flags 		 = 0
+		self.texture_id 		 = None
+		self.texture_anim_id 	 = None
+		self.coord_id 			 = None
+		self.alpha 				 = None
+		self.material_alpha      = None
+		self.material_texture_id = None
+
+class MaterialAlpha(object):
+	def __init__(self):
+		self.interpolation_type = "None"
+		self.tracks				= {}
+
 class LayerParser(Parser):
 	def __init__(self, file):
-		self.tokens = ["FilterMode", "Unshaded", "TextureID", "Alpha", "TwoSided", "Linear"]
+		self.tokens = [
+			"FilterMode", "Unshaded", "SphereEnvironmentMap", 
+			"TwoSided", "Unfogged", "NoDepthTest", "NoDepthSet",
+			"TextureID", "Alpha", "Linear"
+		]
 		super(LayerParser, self).__init__(file)
 		
 	def parse(self, context):
-		layer = {}
+		layer = Layer()
 		pars = 1
 		
-		line = self.file.readline().replace(",", "").strip()
-		pars = self.check_pars(pars, line)
+		line, pars = self.read(pars)
 		
 		while pars > 0:
 			label, *data = line.split(" ")
@@ -188,23 +213,39 @@ class LayerParser(Parser):
 				data = data[1:]
 			
 			if label in self.tokens:			
-				if label == "Alpha":
-					layer["Alpha"] = {}	
-					line = self.file.readline().replace(",", "").strip()
-					pars = self.check_pars(pars, line)
+				if label in Layer.SHADING_FLAGS:
+					layer.shading_flags |= Layer.SHADING_FLAGS[label]
 					
-					while pars > 1:
-						label, *data = line.split(" ")
+				elif label == "FilterMode":
+					if data[0] in Layer.FILTER_MODES:
+						layer.filter_mode = data[0]
+					else:
+						raise Exception("FilterMode '%s' is not valid" % data[0])
+					
+				elif label == "Alpha":
+					if len(data) > 1:
+						layer.material_alpha = MaterialAlpha()
 						
-						layer["Alpha"][label] = data[0] if len(data) > 0 else True
+						line, pars = self.read(pars)
 					
-						line = self.file.readline().replace(",", "").strip()
-						pars = self.check_pars(pars, line)	
-				else:
-					layer[label] = data[0] if len(data) > 0 else True
-			
-			line = self.file.readline().replace(",", "").strip()
-			pars = self.check_pars(pars, line)
+						while pars > 1:
+							label, *data = line.replace(":", "").strip().split(" ")
+							
+							if label in ["Linear", "Hermite", "Bezier"]:
+								layer.material_alpha.interpolation_type = label
+							else:
+								layer.material_alpha.tracks[label] = data[0]
+					
+							line, pars = self.read(pars)	
+					else:
+						layer.alpha = data[0]
+						
+				elif label == "TextureID":
+					layer.texture_id = int(data[0])
+			else:
+				raise Exception("Token '%s' is not valid Layer data" % label)
+				
+			line, pars = self.read(pars)
 		
 		return layer
 		
@@ -266,6 +307,11 @@ class Importer(bpy.types.Operator, ImportHelper):
 			objs = []
 			
 			bpy.context.scene.render.engine = "CYCLES"
+			for area in bpy.context.screen.areas:
+				if area.type == "VIEW_3D":
+					for space in area.spaces:
+						if space.type == "VIEW_3D":
+							space.viewport_shade = "MATERIAL"
 			
 			# Load in the textures
 			for x in range(len(mdl["Textures"])):
@@ -310,7 +356,7 @@ class Importer(bpy.types.Operator, ImportHelper):
 				# The colour is just set to green by default right now, change it in the "default_value" RGBA tuples
 				for layer_key in material["Layers"]:
 					layer = material["Layers"][layer_key]
-					tex = textures[int(layer["TextureID"])]
+					tex = textures[layer.texture_id]
 					
 					if tex == "PLAYER_COLOUR" or tex == "HERO_GLOW":
 						blend_colour = nodes.new("ShaderNodeBsdfDiffuse")
