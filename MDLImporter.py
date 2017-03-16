@@ -284,7 +284,7 @@ class Importer(bpy.types.Operator, ImportHelper):
 						tex = "HERO_GLOW"
 						
 				else:
-					path = os.path.expanduser("~/Desktop/Work/" + texture["Image"].replace("blp", "png"))
+					path = os.path.expanduser("~/Desktop/WC3Data/" + texture["Image"].replace("blp", "png"))
 					tex = bpy.data.images.load(path)
 				
 				textures.append(tex)
