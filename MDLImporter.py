@@ -27,7 +27,7 @@ bl_info = {
 	"name": "MDL Importer",
 	"description": "Imports Warcraft 3 models",
 	"author": "Yellow",
-	"version": (0,1,2),
+	"version": (0,1,3),
 	"blender": (2,7,8),
 	"location": "File > Import > WC3 MDL (.mdl)",
 	"category": "Import-Export"
@@ -59,44 +59,57 @@ class VersionParser(Parser):
 		if int(version) != 800:
 			raise Exception("MDL file version not supported")
 
+			
+class Geoset(object):
+	def __init__(self):
+		self.vertices = []
+		self.normals = []
+		self.faces = []
+		self.uvs = []
+		self.material_id = None
+		
 class GeosetParser(Parser):
 	def __init__(self, file):
 		self.tokens = ["Vertices", "Normals", "TVertices", "Faces", "MaterialID"]
 		super(GeosetParser, self).__init__(file)
 
 	def parse(self, context):
-		ret = {}
-		
+		geoset = Geoset()
 		pars = 1
-		while pars != 0:
+		
+		line = self.file.readline().strip()
+		pars = self.check_pars(pars, line)
+		
+		while pars > 0:
+			label, *data = line.split(" ")
+			
+			if label in self.tokens:
+				if label == "MaterialID":
+					geoset.material_id = int(data[0].replace(",", ""))
+					
+				elif label in ["Vertices", "Normals", "Faces", "TVertices"]:
+					
+					if label == "Vertices":
+						for _ in range(int(data[0])):
+							[geoset.vertices.append(float(v) / 20.0)  for v in self.file.readline().replace("{", "").replace("}", "").replace(",", "").strip().split(" ")]
+							
+					elif label == "Normals":
+						for _ in range(int(data[0])):
+							[geoset.normals.append(float(v)) for v in self.file.readline().replace("{", "").replace("}", "").replace(",", "").strip().split(" ")]
+							
+					elif label == "Faces":
+						line, pars = self.read(pars)
+						[geoset.faces.append(int(v)) for v in self.file.readline().replace("{", "").replace("}", "").replace(",", "").strip().split(" ")]
+						line, pars = self.read(pars)
+						
+					elif label == "TVertices":
+						for _ in range(int(data[0])):
+							geoset.uvs.append([float(v) for v in self.file.readline().replace("{", "").replace("}", "").replace(",", "").strip().split(" ")])
+						
 			line = self.file.readline().strip()
 			pars = self.check_pars(pars, line)
-			
-			label, *data = line.split(" ")
-			if label not in self.tokens:
-				continue
-			
-			if label == "MaterialID":
-				ret[label] = data[0].replace(",", "")
-				continue
-			
-			ret[label] = []
-			
-			if label == "Faces":
-				self.file.readline()
-				pars = self.check_pars(pars, line)
-				
-			for x in range(int(data[0])):
-				if label == "Faces":
-					[ret[label].append(int(v)) for v in self.file.readline().replace("{", "").replace("}", "").replace(",", "").strip().split(" ")]
-				if label == "Vertices":
-					[ret[label].append(float(v) / 20.0)  for v in self.file.readline().replace("{", "").replace("}", "").replace(",", "").strip().split(" ")]
-				if label == "Normals":
-					[ret[label].append(float(v)) for v in self.file.readline().replace("{", "").replace("}", "").replace(",", "").strip().split(" ")]
-				if label == "TVertices":
-					ret[label].append([float(v) for v in self.file.readline().replace("{", "").replace("}", "").replace(",", "").strip().split(" ")])
 					
-		return ret
+		return geoset
 
 class Texture(object):
 	def __init__(self):
@@ -105,7 +118,7 @@ class Texture(object):
 		
 class TextureParser(Parser):
 	def parse(self, context, count):
-		ret = []
+		textures = []
 		pars = 1
 		
 		line, pars = self.read(pars)
@@ -115,7 +128,7 @@ class TextureParser(Parser):
 			
 			if label == "Bitmap":
 				texture = Texture()
-				ret.append(texture)
+				textures.append(texture)
 				
 				line, pas = self.read(pars)
 
@@ -133,7 +146,7 @@ class TextureParser(Parser):
 			
 			line, pars = self.read(pars)
 		
-		return ret
+		return textures
 
 class Material(object):
 	FLAGS = {"ConstantColor": 2**0, "SortPrimitivesNearZ": 2**3, "SortPrimitivesFarZ": 2**4, "FullResolution": 2**5}
@@ -147,7 +160,7 @@ class MaterialParser(Parser):
 		super(MaterialParser, self).__init__(file)
 
 	def parse(self, context, count):
-		ret = []
+		materials = []
 		pars = 1
 
 		line, pars = self.read(pars)
@@ -157,7 +170,7 @@ class MaterialParser(Parser):
 			
 			if label == "Material":	
 				material = Material()
-				ret.append(material)
+				materials.append(material)
 				
 				line, pars = self.read(pars)
 				
@@ -176,7 +189,7 @@ class MaterialParser(Parser):
 				
 			line, pars = self.read(pars)
 					
-		return ret
+		return materials
 
 class Layer(object):
 	SHADING_FLAGS = {"Unshaded": 2**0, "SphereEnvironmentMap": 2**1, "TwoSided": 2**4, "Unfogged": 2**5, "NoDepthTest": 2**6, "NoDepthSet": 2**7}
@@ -388,17 +401,17 @@ class Importer(bpy.types.Operator, ImportHelper):
 				obj.location = (0.0, 0.0, 0.0)
 				bpy.context.scene.objects.link(obj)
 				
-				mesh.vertices.add(len(geoset["Vertices"]) // 3)
-				mesh.vertices.foreach_set("co", geoset["Vertices"])
+				mesh.vertices.add(len(geoset.vertices) // 3)
+				mesh.vertices.foreach_set("co", geoset.vertices)
 				
-				mesh.tessfaces.add(len(geoset["Faces"]) // 3)
-				mesh.tessfaces.foreach_set("vertices", geoset["Faces"])
+				mesh.tessfaces.add(len(geoset.faces) // 3)
+				mesh.tessfaces.foreach_set("vertices", geoset.faces)
 				
-				mesh.vertices.foreach_set("normal", geoset["Normals"])
+				mesh.vertices.foreach_set("normal", geoset.normals)
 				
 				mesh.update()
 				
-				vi_uv = {i: (u, 1.0 - v) for i, (u, v) in enumerate(geoset["TVertices"])}
+				vi_uv = {i: (u, 1.0 - v) for i, (u, v) in enumerate(geoset.uvs)}
 				per_loop_list = [0.0] * len(mesh.loops)
 				for loop in mesh.loops:
 					per_loop_list[loop.index] = vi_uv[loop.vertex_index]
@@ -408,8 +421,7 @@ class Importer(bpy.types.Operator, ImportHelper):
 				mesh.uv_textures.new("UV")
 				mesh.uv_layers[0].data.foreach_set("uv", per_loop_list)
 				
-				mat_id = int(geoset["MaterialID"])
-				mesh.materials.append(materials[mat_id])
+				mesh.materials.append(materials[geoset.material_id])
 				
 				mesh.update()
 				
@@ -418,7 +430,7 @@ class Importer(bpy.types.Operator, ImportHelper):
 		return {"FINISHED"}
 
 def menu(self, context):
-	self.layout.operator("import_mesh.mdl", text="MDL (.mdl)")
+	self.layout.operator("import_mesh.mdl", text="WC3 MDL (.mdl)")
 
 def register():
 	bpy.utils.register_class(Importer)
