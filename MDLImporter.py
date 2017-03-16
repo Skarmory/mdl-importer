@@ -27,7 +27,7 @@ bl_info = {
 	"name": "MDL Importer",
 	"description": "Imports Warcraft 3 models",
 	"author": "Yellow",
-	"version": (0,1,1),
+	"version": (0,1,2),
 	"blender": (2,7,8),
 	"location": "File > Import > WC3 MDL (.mdl)",
 	"category": "Import-Export"
@@ -130,45 +130,46 @@ class TextureParser(Parser):
 		
 		return ret
 
+class Material(object):
+	FLAGS = {"ConstantColor": 2**0, "SortPrimitivesNearZ": 2**3, "SortPrimitivesFarZ": 2**4, "FullResolution": 2**5}
+	def __init__(self):
+		self.layers = []
+		self.flags = 0
+		
 class MaterialParser(Parser):
 	def __init__(self, file):
 		self.layer_parser = LayerParser(file)
 		super(MaterialParser, self).__init__(file)
 
 	def parse(self, context, count):
-		ret = {}
-		material = 0
+		ret = []
 		pars = 1
 
-		line = self.file.readline().strip()
-		pars = self.check_pars(pars, line)
+		line, pars = self.read(pars)
 		
-		while material < count:
+		for _ in range(count):
 			label, *data = line.split(" ")
 			
-			if label == "Material":				
-				ret[material] = {"Layers": {}}
-				layer = 0
+			if label == "Material":	
+				material = Material()
+				ret.append(material)
 				
-				line = self.file.readline().replace(",", "").strip()
-				pars = self.check_pars(pars, line)
+				line, pars = self.read(pars)
 				
 				while pars > 1:
-					label, *data = line.replace(",", "").split(" ")
+					label, *data = line.split(" ")
 					
 					if label == "Layer":
-						ret[material]["Layers"][layer] = self.layer_parser.parse(context)
-						layer += 1
+						material.layers.append(self.layer_parser.parse(context))
 						pars -= 1
-					elif label == "ConstantColor":
-						ret[material]["ConstantColor"] = True
+					elif label in Material.FLAGS:
+						material.flags |= Material.FLAGS[label]
+					else:
+						raise Exception("Unknown data in material: %s" % label)
 						
-					line = self.file.readline().strip()
-					pars = self.check_pars(pars, line)
+					line, pars = self.read(pars)
 				
-			material += 1
-			line = self.file.readline().replace(",", "").strip()
-			pars = self.check_pars(pars, line)	
+			line, pars = self.read(pars)
 					
 		return ret
 
@@ -354,8 +355,7 @@ class Importer(bpy.types.Operator, ImportHelper):
 				# This bit sorts out composing layers. The layer with team colour needs to have the colour mixed in
 				# The layer without the team colours need to have transparency mixed in
 				# The colour is just set to green by default right now, change it in the "default_value" RGBA tuples
-				for layer_key in material["Layers"]:
-					layer = material["Layers"][layer_key]
+				for layer in material.layers:
 					tex = textures[layer.texture_id]
 					
 					if tex == "PLAYER_COLOUR" or tex == "HERO_GLOW":
