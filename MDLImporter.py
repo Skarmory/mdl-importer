@@ -98,35 +98,40 @@ class GeosetParser(Parser):
 					
 		return ret
 
+class Texture(object):
+	def __init__(self):
+		self.filepath = ""
+		self.replaceable_id = None
+		
 class TextureParser(Parser):
 	def parse(self, context, count):
-		ret = {}
-		texture = 0
+		ret = []
 		pars = 1
 		
-		while texture < count:
-			line = self.file.readline().strip()
-			pars = self.check_pars(pars, line)
+		line, pars = self.read(pars)
+		
+		for _ in range(count):
 			label, *data = line.split(" ")
 			
-			if label != "Bitmap":
-				continue
-			
-			ret[texture] = {}
-			line = self.file.readline().replace(",", "").strip()
-
-			while self.check_pars(pars, line) == pars:
-				label, data = line.split(" ")
+			if label == "Bitmap":
+				texture = Texture()
+				ret.append(texture)
 				
-				if data == '""':
-					ret[texture][label] = ""
-				else:
-					ret[texture][label] = data.replace('"', "")
+				line, pas = self.read(pars)
+
+				while pars > 1:
+					label, data = line.split(" ")
 					
-				line = self.file.readline().replace(",", "").strip()
+					if label == "Image" and data:
+						texture.filepath = data.replace('"', "").replace("blp", "png")
+					elif label == "ReplaceableId":
+						texture.replaceable_id = int(data)
+					else:
+						raise Exception("Unknown data in texture: %s %s" % (label, data))
+						
+					line, pars = self.read(pars)
 			
-			pars = self.check_pars(pars, line)
-			texture += 1
+			line, pars = self.read(pars)
 		
 		return ret
 
@@ -165,7 +170,7 @@ class MaterialParser(Parser):
 					elif label in Material.FLAGS:
 						material.flags |= Material.FLAGS[label]
 					else:
-						raise Exception("Unknown data in material: %s" % label)
+						raise Exception("Unknown data in material: %s %s" % (label, data))
 						
 					line, pars = self.read(pars)
 				
@@ -221,7 +226,7 @@ class LayerParser(Parser):
 					if data[0] in Layer.FILTER_MODES:
 						layer.filter_mode = data[0]
 					else:
-						raise Exception("FilterMode '%s' is not valid" % data[0])
+						raise Exception("Unknown FilterMode: '%s'" % data[0])
 					
 				elif label == "Alpha":
 					if len(data) > 1:
@@ -244,7 +249,7 @@ class LayerParser(Parser):
 				elif label == "TextureID":
 					layer.texture_id = int(data[0])
 			else:
-				raise Exception("Token '%s' is not valid Layer data" % label)
+				raise Exception("Unknown data in layer: %s %s" % (label, data))
 				
 			line, pars = self.read(pars)
 		
@@ -317,24 +322,22 @@ class Importer(bpy.types.Operator, ImportHelper):
 			# Load in the textures
 			for x in range(len(mdl["Textures"])):
 				texture = mdl["Textures"][x]
-				tex = None
 				
 				# There are some textures with no file path, these appear to be just solid colours instead
-				if not texture["Image"]:
-					if "ReplaceableId" not in texture:
-						tex = "TRANSPARENT"
+				if not texture.filepath:
+					if not texture.replaceable_id:
+						textures.append("TRANSPARENT")
 						
-					elif texture["ReplaceableId"] == "1":
-						tex = "PLAYER_COLOUR"
+					elif texture.replaceable_id == 1:
+						textures.append("PLAYER_COLOUR")
 						
-					elif texture["ReplaceableId"] == "2":
-						tex = "HERO_GLOW"
-						
+					elif texture.replaceable_id == 2:
+						textures.append("HERO_GLOW")
+					else:
+						raise Exception("Texture with no file path and out of range replaceable id found")
 				else:
-					path = os.path.expanduser("~/Desktop/WC3Data/" + texture["Image"].replace("blp", "png"))
-					tex = bpy.data.images.load(path)
-				
-				textures.append(tex)
+					path = os.path.expanduser("~/Desktop/WC3Data/" + texture.filepath)
+					textures.append(bpy.data.images.load(path))
 			
 			# Create the materials
 			for x in range(len(mdl["Materials"])):
