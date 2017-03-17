@@ -27,7 +27,7 @@ bl_info = {
 	"name": "MDL Importer",
 	"description": "Imports Warcraft 3 models",
 	"author": "Yellow",
-	"version": (0,1,3),
+	"version": (0,1,5),
 	"blender": (2,7,8),
 	"location": "File > Import > WC3 MDL (.mdl)",
 	"category": "Import-Export"
@@ -143,7 +143,10 @@ class TextureParser(Parser):
 						raise Exception("Unknown data in texture: %s %s" % (label, data))
 						
 					line, pars = self.read(pars)
-			
+				
+				if texture.replaceable_id == 2:
+					texture.filepath = "ReplaceableTextures/TeamGlow/TeamGlow00.png"
+				
 			line, pars = self.read(pars)
 		
 		return textures
@@ -267,6 +270,13 @@ class LayerParser(Parser):
 			line, pars = self.read(pars)
 		
 		return layer
+
+class Model(object):
+	def __init__(self):
+		self.name = ""
+		self.geosets = []
+		self.textures = []
+		self.materials = []
 		
 class MDLParser(Parser):
 	def __init__(self, file):
@@ -276,13 +286,18 @@ class MDLParser(Parser):
 			"Geoset": GeosetParser(file),
 			"Textures": TextureParser(file),
 			"Materials": MaterialParser(file)
-			#"Sequences": , "GlobalSequences", 
-			#"GeosetAnim", "Bone", "Helper", "Attachment", "PivotPoints"
+			#"Sequences": , 
+			#"GlobalSequences", 
+			#"GeosetAnim", 
+			#"Bone", 
+			#"Helper", 
+			#"Attachment", 
+			#"PivotPoints"
 		}
-		self.mdl = {"Geosets": []}
 		super(MDLParser, self).__init__(file)
 
 	def parse(self, context):
+		model = Model()
 		line = self.file.readline()
 		while(line):
 			label, *data = line.split(" ")
@@ -292,19 +307,19 @@ class MDLParser(Parser):
 				continue
 				
 			if label == "Model":
-				self.mdl["Name"] = data[0].replace('"', "")
+				model.name = data[0].replace('"', "")
 			elif label == "Geoset":
-				self.mdl["Geosets"].append(self.tokens[label].parse(context))
+				model.geosets.append(self.tokens[label].parse(context))
 			elif label == "Version":
 				self.tokens["Version"].parse(context)
 			elif label == "Textures":
-				self.mdl["Textures"] = self.tokens[label].parse(context, int(data[0]))
+				model.textures = self.tokens[label].parse(context, int(data[0]))
 			elif label == "Materials":
-				self.mdl["Materials"] = self.tokens[label].parse(context, int(data[0]))
+				model.materials = self.tokens[label].parse(context, int(data[0]))
 				
 			line = self.file.readline()
 
-		return self.mdl
+		return model
 
 class Importer(bpy.types.Operator, ImportHelper):
 	bl_idname = "import_mesh.mdl"
@@ -319,12 +334,13 @@ class Importer(bpy.types.Operator, ImportHelper):
 	def execute(self, context):
 	
 		with open(self.filepath, "r") as file:
-			mdl = MDLParser(file).parse(context)
+			model = MDLParser(file).parse(context)
 			
 			textures = []
 			materials = []
 			objs = []
 			
+			# Make blender set the viewport shading to "Material" so we can see something
 			bpy.context.scene.render.engine = "CYCLES"
 			for area in bpy.context.screen.areas:
 				if area.type == "VIEW_3D":
@@ -332,30 +348,10 @@ class Importer(bpy.types.Operator, ImportHelper):
 						if space.type == "VIEW_3D":
 							space.viewport_shade = "MATERIAL"
 			
-			# Load in the textures
-			for x in range(len(mdl["Textures"])):
-				texture = mdl["Textures"][x]
-				
-				# There are some textures with no file path, these appear to be just solid colours instead
-				if not texture.filepath:
-					if not texture.replaceable_id:
-						textures.append("TRANSPARENT")
-						
-					elif texture.replaceable_id == 1:
-						textures.append("PLAYER_COLOUR")
-						
-					elif texture.replaceable_id == 2:
-						textures.append("HERO_GLOW")
-					else:
-						raise Exception("Texture with no file path and out of range replaceable id found")
-				else:
-					path = os.path.expanduser("~/Desktop/WC3Data/" + texture.filepath)
-					textures.append(bpy.data.images.load(path))
-			
 			# Create the materials
-			for x in range(len(mdl["Materials"])):
-				material = mdl["Materials"][x]
-				mat = bpy.data.materials.new("TexMat")
+			for i, material in enumerate(model.materials):
+
+				mat = bpy.data.materials.new("%s Material %i" % (model.name, i))
 				mat.use_nodes = True
 				mat.game_settings.alpha_blend = "CLIP"
 				
@@ -367,25 +363,38 @@ class Importer(bpy.types.Operator, ImportHelper):
 				diffuse = nodes["Diffuse BSDF"]
 				mix = nodes.new("ShaderNodeMixShader")
 				blend_colour = None
+				rid = None
 				
 				# This bit sorts out composing layers. The layer with team colour needs to have the colour mixed in
 				# The layer without the team colours need to have transparency mixed in
 				# The colour is just set to green by default right now, change it in the "default_value" RGBA tuples
 				for layer in material.layers:
-					tex = textures[layer.texture_id]
+					tex = model.textures[layer.texture_id]
+					rid = tex.replaceable_id
 					
-					if tex == "PLAYER_COLOUR" or tex == "HERO_GLOW":
+					if rid == 1:
 						blend_colour = nodes.new("ShaderNodeBsdfDiffuse")
 						blend_colour.inputs[0].default_value = (0.0, 1.0, 0.0, 1.0)
 						continue
+					elif rid == 2:
+						nodes.remove(diffuse)
+						diffuse = nodes.new("ShaderNodeEmission")
+						diffuse.inputs[0].default_value = (0.0, 1.0, 0.0, 1.0)
 					
-					tex_image.image = tex
+					tex_image.image = bpy.data.images.load(os.path.expanduser("~/Desktop/WC3Data/" + tex.filepath))
 					if not blend_colour:
 						blend_colour = nodes.new("ShaderNodeBsdfTransparent")
-						blend_colour.inputs[0].default_value = (0.0, 0.0, 0.0, 1.0)
+						if rid == 2:
+							blend_colour.inputs[0].default_value = (1.0, 1.0, 1.0, 1.0)
+						else:
+							blend_colour.inputs[0].default_value = (0.0, 0.0, 0.0, 1.0)
 				
-				links.new(tex_image.outputs[0], diffuse.inputs[0])
-				links.new(tex_image.outputs[1], mix.inputs[0])
+				if rid == 2:
+					links.new(tex_image.outputs[0], mix.inputs[0])
+				else:
+					links.new(tex_image.outputs[0], diffuse.inputs[0])
+					links.new(tex_image.outputs[1], mix.inputs[0])
+					
 				links.new(blend_colour.outputs[0], mix.inputs[1])
 				links.new(diffuse.outputs[0], mix.inputs[2])
 				links.new(mix.outputs[0], output.inputs[0])
@@ -393,11 +402,10 @@ class Importer(bpy.types.Operator, ImportHelper):
 				materials.append(mat)
 			
 			# Load in the meshes, and UVs, and add the materials to the correct one
-			for x in range(len(mdl["Geosets"])):
-				geoset = mdl["Geosets"][x]
+			for i, geoset in enumerate(model.geosets):
 			
-				mesh = bpy.data.meshes.new("%s%iMesh" % (mdl["Name"], x))
-				obj = bpy.data.objects.new("%s%iMesh" % (mdl["Name"], x), mesh)
+				mesh = bpy.data.meshes.new("%s Mesh %i" % (model.name, i))
+				obj = bpy.data.objects.new("%s Mesh %i" % (model.name, i), mesh)
 				obj.location = (0.0, 0.0, 0.0)
 				bpy.context.scene.objects.link(obj)
 				
