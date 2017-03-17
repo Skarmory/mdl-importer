@@ -250,7 +250,7 @@ class LayerParser(Parser):
 						while pars > 1:
 							label, *data = line.replace(":", "").strip().split(" ")
 							
-							if label in ["Linear", "Hermite", "Bezier"]:
+							if label in ["Linear", "Hermite", "Bezier", "DontInterp"]:
 								layer.material_alpha.interpolation_type = label
 							else:
 								layer.material_alpha.tracks[label] = data[0]
