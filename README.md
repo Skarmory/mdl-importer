@@ -1,7 +1,7 @@
 MDL Importer
 ============
 
-This is a simple Blender addon that allows the importing of WarCraft 3 model meshes.
+This is a simple Blender addon that allows the importing of WarCraft 3 models.
 
 Install
 -------
@@ -10,7 +10,7 @@ Install it by going to
 ```
 File -> User Preferences -> Install from File..
 ```
-in Blender, and then point it at the mdl-importer.py
+in Blender, and then point it at the mdl-importer.py file.
 
 Usage
 -----
